@@ -804,21 +804,28 @@ body { background: var(--bg); color: var(--text); font-family: 'Rajdhani', sans-
   font-family: 'Bebas Neue', sans-serif;
 }
 #fpsOverlay.active { display: flex; }
+#fpsCanvasWrap {
+  position: relative;
+  width: 100%;
+  flex: 1;          /* fill all space above HUD */
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
 #fpsCanvas {
   width: 100%;
-  max-width: 800px;
-  height: 420px;
+  height: 100%;
   display: block;
   cursor: none;
   image-rendering: pixelated;
 }
 #fpsHUD {
   width: 100%;
-  max-width: 800px;
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 16px;
+  padding: 8px 24px;
   background: #0a0a0a;
   border-top: 2px solid #cc2200;
   box-sizing: border-box;
@@ -831,13 +838,14 @@ body { background: var(--bg); color: var(--text); font-family: 'Rajdhani', sans-
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   pointer-events: none;
+  z-index: 5;
 }
 #fpsMessage {
   position: absolute;
-  top: 30%;
+  top: 28%;
   left: 50%;
   transform: translateX(-50%);
   font-size: 52px;
@@ -848,6 +856,7 @@ body { background: var(--bg); color: var(--text); font-family: 'Rajdhani', sans-
   transition: opacity 0.3s;
   pointer-events: none;
   white-space: nowrap;
+  z-index: 5;
 }
 #fpsMessage.show { opacity: 1; }
 #fpsIntro {
@@ -898,18 +907,21 @@ body { background: var(--bg); color: var(--text); font-family: 'Rajdhani', sans-
     <p id="fpsIntroSub">The enemy King has been threatened.</p>
     <p style="color:#cc2200;font-size:18px;letter-spacing:2px;" id="fpsIntroRole">YOU ARE THE ATTACKER</p>
     <p style="margin-top:12px;">Kill the King to confirm checkmate.</p>
-    <p>Survive 15 seconds to escape and undo the move.</p>
     <p style="color:#555;font-size:13px;margin-top:8px;">MOUSE to aim · CLICK to shoot · <kbd style="background:#1a1a1a;padding:2px 6px;border:1px solid #333;border-radius:3px;font-family:monospace;">ESC</kbd> forfeit</p>
     <button class="fps-start-btn" onclick="beginFPSRound()">ENTER THE ARENA</button>
   </div>
-  <canvas id="fpsCanvas" width="800" height="420"></canvas>
-  <div id="fpsCrosshair">
-    <svg width="20" height="20" viewBox="0 0 20 20">
-      <line x1="10" y1="2" x2="10" y2="8" stroke="#ff4422" stroke-width="1.5"/>
-      <line x1="10" y1="12" x2="10" y2="18" stroke="#ff4422" stroke-width="1.5"/>
-      <line x1="2" y1="10" x2="8" y2="10" stroke="#ff4422" stroke-width="1.5"/>
-      <line x1="12" y1="10" x2="18" y2="10" stroke="#ff4422" stroke-width="1.5"/>
-    </svg>
+  <div id="fpsCanvasWrap">
+    <canvas id="fpsCanvas" width="1280" height="640"></canvas>
+    <div id="fpsCrosshair">
+      <svg width="24" height="24" viewBox="0 0 24 24">
+        <line x1="12" y1="2"  x2="12" y2="9"  stroke="#ff4422" stroke-width="2"/>
+        <line x1="12" y1="15" x2="12" y2="22" stroke="#ff4422" stroke-width="2"/>
+        <line x1="2"  y1="12" x2="9"  y2="12" stroke="#ff4422" stroke-width="2"/>
+        <line x1="15" y1="12" x2="22" y2="12" stroke="#ff4422" stroke-width="2"/>
+        <circle cx="12" cy="12" r="1.5" fill="#ff4422"/>
+      </svg>
+    </div>
+    <div id="fpsMessage"></div>
   </div>
   <div id="fpsHUD">
     <div class="fps-hud-block">
@@ -933,7 +945,6 @@ body { background: var(--bg); color: var(--text); font-family: 'Rajdhani', sans-
       <div class="fps-hud-val" id="fpsObjective" style="font-size:16px;letter-spacing:2px;color:#ffcc00;">KILL THE KING</div>
     </div>
   </div>
-  <div id="fpsMessage"></div>
 </div>
 
 <!-- TITLE SCREEN -->
@@ -2615,7 +2626,7 @@ function showStatsScreen() {
 const FPS = {
   active: false,
   ctx: null,
-  W: 800, H: 420,
+  W: 1280, H: 640,
   // Player state
   px: 2.5, py: 2.5,   // position (map units)
   pAngle: 0,           // facing angle (radians)
@@ -2990,7 +3001,7 @@ function fpsRaycastDist(ox, oy, angle) {
 }
 
 const FOV = Math.PI / 3;
-const NUM_RAYS = 160;
+const NUM_RAYS = 320;
 
 function renderFPS() {
   const ctx = FPS.ctx;
@@ -3059,10 +3070,11 @@ function renderFPS() {
     if(Math.abs(angle) > FOV * 0.6) return; // only render when reasonably in view
 
     const screenX = (0.5 + angle / FOV) * W;
-    const spriteH = Math.min(H * 1.5, H / (e.dist * 0.5)); // bigger sprites
-    const spriteW = spriteH * (e.type==='king' ? 0.65 : 0.55);
+    // Smaller sprites: height capped lower, width proportionally wider
+    const spriteH = Math.min(H * 0.55, H / (e.dist * 0.85));
+    const spriteW = spriteH * (e.type==='king' ? 0.9 : 0.75);
     const sx = screenX - spriteW/2;
-    const sy = H/2 - spriteH * 0.55; // shift slightly down so feet land on floor
+    const sy = H/2 - spriteH * 0.5; // center vertically on horizon
 
     // Occlusion: only hide if wall is CLOSER than the enemy (fixed direction)
     const rayIdx = Math.floor(screenX / (W / NUM_RAYS));
@@ -3098,42 +3110,42 @@ function renderFPS() {
       ctx.strokeRect(sx, sy - 10, spriteW, 7);
     } else {
       // Soldier: distinct head + body with dark outline so they show on dark walls
-      const headR = spriteW * 0.22;
+      const headR = spriteW * 0.18;
       const headX = sx + spriteW/2;
-      const headY = sy + spriteH * 0.2;
+      const headY = sy + spriteH * 0.22;
 
       // Shadow/outline pass first
       ctx.fillStyle = 'rgba(0,0,0,0.7)';
       ctx.beginPath();
-      ctx.arc(headX, headY, headR + 3, 0, Math.PI*2);
+      ctx.arc(headX, headY, headR + 2, 0, Math.PI*2);
       ctx.fill();
-      ctx.fillRect(sx + spriteW*0.22 - 3, sy + spriteH*0.36, spriteW*0.56 + 6, spriteH*0.48 + 3);
+      ctx.fillRect(sx + spriteW*0.25 - 2, sy + spriteH*0.38, spriteW*0.5 + 4, spriteH*0.44 + 2);
 
       // Coloured body
       ctx.fillStyle = e.color;
       ctx.beginPath();
       ctx.arc(headX, headY, headR, 0, Math.PI*2);
       ctx.fill();
-      ctx.fillRect(sx + spriteW*0.22, sy + spriteH*0.36, spriteW*0.56, spriteH*0.48);
+      ctx.fillRect(sx + spriteW*0.25, sy + spriteH*0.38, spriteW*0.5, spriteH*0.44);
 
-      // Bright highlight on head so enemies are readable against dark walls
+      // Bright highlight on head
       ctx.fillStyle = 'rgba(255,255,255,0.25)';
       ctx.beginPath();
-      ctx.arc(headX - headR*0.2, headY - headR*0.2, headR*0.5, 0, Math.PI*2);
+      ctx.arc(headX - headR*0.2, headY - headR*0.2, headR*0.45, 0, Math.PI*2);
       ctx.fill();
 
-      // Type label above head (small but readable)
+      // Type label above head
       ctx.fillStyle = '#fff';
-      ctx.font = `bold ${Math.max(9, Math.floor(spriteW * 0.28))}px monospace`;
+      ctx.font = `bold ${Math.max(8, Math.floor(spriteW * 0.24))}px monospace`;
       ctx.textAlign = 'center';
-      ctx.fillText(e.type[0].toUpperCase(), headX, sy + spriteH * 0.07);
+      ctx.fillText(e.type[0].toUpperCase(), headX, sy + spriteH * 0.1);
 
       // HP pips for multi-hp enemies
       if(e.maxHp > 1) {
         const pipW = (spriteW - 4) / e.maxHp;
         for(let i=0; i<e.maxHp; i++) {
           ctx.fillStyle = i < e.hp ? '#ff4422' : '#2a0a0a';
-          ctx.fillRect(sx + 2 + i*pipW, sy - 8, pipW - 1, 5);
+          ctx.fillRect(sx + 2 + i*pipW, sy - 7, pipW - 1, 4);
         }
       }
     }
@@ -3141,22 +3153,33 @@ function renderFPS() {
     ctx.textAlign = 'left'; // reset
   });
 
-  // Weapon (static shotgun barrel at bottom)
-  const gunW = 120, gunH = 90;
-  const gunX = W/2 - gunW/2 + Math.sin(performance.now()*0.004)*4;
-  const gunY = H - gunH + 10;
+  // Weapon — raised to eye level (roughly 60% down the screen)
+  const gunW = 160, gunH = 110;
+  const gunX = W/2 - gunW/2 + Math.sin(performance.now()*0.004)*5;
+  const gunY = H * 0.62;
+  // Handle / grip
+  ctx.fillStyle = '#3a3a3a';
+  ctx.fillRect(gunX+50, gunY+40, 28, 55);
+  // Receiver body
   ctx.fillStyle = '#555';
-  ctx.fillRect(gunX+30, gunY+20, 60, 15);
+  ctx.fillRect(gunX+24, gunY+18, 80, 26);
+  // Barrel
+  ctx.fillStyle = '#444';
+  ctx.fillRect(gunX+34, gunY+8, 60, 13);
+  // Barrel tip
   ctx.fillStyle = '#333';
-  ctx.fillRect(gunX+40, gunY+5, 40, 18);
-  ctx.fillStyle = '#222';
-  ctx.fillRect(gunX+45, gunY, 30, 8);
-  // Muzzle flash
+  ctx.fillRect(gunX+30, gunY+4, 16, 18);
+  ctx.fillRect(gunX+78, gunY+4, 16, 18);
+  // Muzzle flash — fires from barrel tip at eye level
   if(FPS.muzzleFlash > 0) {
-    ctx.globalAlpha = FPS.muzzleFlash * 0.9;
-    ctx.fillStyle = '#ffcc00';
+    ctx.globalAlpha = FPS.muzzleFlash * 0.95;
+    ctx.fillStyle = '#ffdd00';
     ctx.beginPath();
-    ctx.arc(gunX+60, gunY, 18 * FPS.muzzleFlash, 0, Math.PI*2);
+    ctx.arc(gunX+60, gunY+4, 22 * FPS.muzzleFlash, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(gunX+60, gunY+4, 10 * FPS.muzzleFlash, 0, Math.PI*2);
     ctx.fill();
     ctx.globalAlpha = 1;
   }
