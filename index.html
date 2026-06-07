@@ -1940,8 +1940,17 @@ function getValidMoves(piece) {
   };
 
   if(type==='pawn') {
-    const dir = side==='player' ? -1 : 1;
-    if(isEmpty(row+dir,col)) { moves.push({row:row+dir,col,attack:false}); if((side==='player'&&row===6)||(side==='enemy'&&row===1)) if(isEmpty(row+2*dir,col)) moves.push({row:row+2*dir,col,attack:false}); }
+    // In multiplayer: guest (black) pieces are side='player' but move downward (+1)
+    // Host (white) pieces move upward (-1) — same as single player
+    // We determine direction by starting row: rows 0-1 = moving down, rows 6-7 = moving up
+    const isGuestPawn = G.isMultiplayer && MP.role === 'guest' && side === 'player';
+    const isHostEnemyPawn = G.isMultiplayer && MP.role === 'host' && side === 'enemy';
+    const dir = (isGuestPawn || isHostEnemyPawn) ? 1 : -1;
+    const startRow = (dir === -1) ? 6 : 1;
+    if(isEmpty(row+dir,col)) {
+      moves.push({row:row+dir,col,attack:false});
+      if(row===startRow && isEmpty(row+2*dir,col)) moves.push({row:row+2*dir,col,attack:false});
+    }
     if(hasUpgrade('pawn_double_move') && side==='player') { if(isEmpty(row+2*dir,col)&&isEmpty(row+dir,col)) moves.push({row:row+2*dir,col,attack:false}); }
     if(isEnemy(row+dir,col-1)) moves.push({row:row+dir,col:col-1,attack:true});
     if(isEnemy(row+dir,col+1)) moves.push({row:row+dir,col:col+1,attack:true});
@@ -2031,7 +2040,9 @@ function executeMove(piece, toRow, toCol, isAttack) {
     } else {
       // Capture!
       capturedPiece.captured = true;
+      // Remove from whichever pool it belongs to
       delete G.enemyPieces[capturedPiece.id];
+      delete G.playerPieces[capturedPiece.id];
       G.totalCaptures++;
       G.capturedThisTurn = true;
       // Grant XP to the capturing piece
@@ -3981,20 +3992,20 @@ function mpPushSharedBoard() {
   Object.values(G.playerPieces).forEach(p => {
     if(!p.captured) allPieces.push({
       id:p.id, type:p.type, row:p.row, col:p.col,
-      hp:p.hp, maxHP:p.maxHP,
-      owner: MP.role,   // 'host' or 'guest'
+      hp:p.hp, maxHP:p.maxHP, moved: p.moved || 0,
+      owner: MP.role,
     });
   });
   Object.values(G.enemyPieces).forEach(p => {
     if(!p.captured) allPieces.push({
       id:p.id, type:p.type, row:p.row, col:p.col,
-      hp:p.hp, maxHP:p.maxHP,
+      hp:p.hp, maxHP:p.maxHP, moved: p.moved || 0,
       owner: MP.role === 'host' ? 'guest' : 'host',
     });
   });
   G.mpGameRef.child('sharedBoard').set({
     pieces: allPieces,
-    turn: MP.role,             // who just moved (so opponent knows it's their turn)
+    turn: MP.role,
     moveCount: G.mpMoveCount,
     ts: Date.now(),
   });
@@ -4041,7 +4052,6 @@ function mpApplySharedBoard(d) {
     const isMyPiece = (p.owner === MP.role);
     const side = isMyPiece ? 'player' : 'enemy';
     const old = oldPieces[p.id] || {};
-
     const piece = {
       id: p.id,
       type: p.type,
@@ -4054,7 +4064,7 @@ function mpApplySharedBoard(d) {
       stunnedTurns: 0,
       burnStacks: 0,
       frozen: 0,
-      moved: old.moved !== undefined ? old.moved : 0,
+      moved: p.moved !== undefined ? p.moved : (old.moved || 0),
       xp: old.xp || 0,
       pieceLevel: old.pieceLevel || 1,
       captured: false,
