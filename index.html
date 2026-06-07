@@ -4008,14 +4008,17 @@ function mpListenSharedBoard() {
     const d = snap.val();
     if(!d || !d.pieces) return;
 
-    // Only apply if the opponent just moved (not our own push)
-    if(d.turn !== MP.role) {
-      mpApplySharedBoard(d);
-    }
+    const opponentJustMoved = (d.turn !== MP.role);
 
-    // Update turn — it's our turn if the last push was from the opponent
-    const ourTurn = (d.turn !== MP.role);
-    G.turnPhase = ourTurn ? 'player' : 'waiting';
+    if(opponentJustMoved) {
+      // Opponent moved — apply their board state and unlock our turn
+      mpApplySharedBoard(d);
+      G.turnPhase = 'player';
+      addLog('Opponent moved — your turn!', 'good');
+    }
+    // If we just moved (d.turn === MP.role), do nothing — we already have
+    // the correct local state and turnPhase = 'waiting' was set by mpOnPlayerMoveChess
+
     mpUpdateTurnIndicator();
     renderBoard();
     updateTopBar();
@@ -4024,7 +4027,12 @@ function mpListenSharedBoard() {
 }
 
 function mpApplySharedBoard(d) {
-  // Rebuild G.board, G.playerPieces, G.enemyPieces from the shared state
+  // Save existing piece state we want to preserve (moved flags, xp, upgrades)
+  const oldPieces = {};
+  Object.values(G.playerPieces).concat(Object.values(G.enemyPieces)).forEach(p => {
+    oldPieces[p.id] = { moved: p.moved, xp: p.xp, pieceLevel: p.pieceLevel, upgrades: p.upgrades || [] };
+  });
+
   G.board = Array(8).fill(null).map(() => Array(8).fill(null));
   G.playerPieces = {};
   G.enemyPieces  = {};
@@ -4032,21 +4040,33 @@ function mpApplySharedBoard(d) {
   (d.pieces || []).forEach(p => {
     const isMyPiece = (p.owner === MP.role);
     const side = isMyPiece ? 'player' : 'enemy';
+    const old = oldPieces[p.id] || {};
+
     const piece = {
-      id: p.id, type: p.type, side,
-      row: p.row, col: p.col,
-      hp: p.hp, maxHP: p.maxHP,
-      upgrades: [], stunnedTurns: 0, burnStacks: 0,
-      frozen: 0, moved: 0, xp: 0, pieceLevel: 1, captured: false,
+      id: p.id,
+      type: p.type,
+      side,
+      row: p.row,
+      col: p.col,
+      hp: p.hp,
+      maxHP: p.maxHP,
+      upgrades: old.upgrades || [],
+      stunnedTurns: 0,
+      burnStacks: 0,
+      frozen: 0,
+      moved: old.moved !== undefined ? old.moved : 0,
+      xp: old.xp || 0,
+      pieceLevel: old.pieceLevel || 1,
+      captured: false,
     };
     G.board[p.row][p.col] = piece;
     if(isMyPiece) G.playerPieces[piece.id] = piece;
     else           G.enemyPieces[piece.id]  = piece;
   });
 
-  G.mpMoveCount = d.moveCount || 0;
+  G.mpMoveCount = d.moveCount || G.mpMoveCount;
 
-  // Check if our king is gone — we lost
+  // Check if our king was captured — we lost
   const myKingAlive = Object.values(G.playerPieces).some(p => p.type === 'king' && !p.captured);
   if(!myKingAlive) {
     const opponent = MP.role === 'host' ? 'guest' : 'host';
