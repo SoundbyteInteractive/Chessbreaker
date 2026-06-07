@@ -1753,6 +1753,12 @@ function placePiece(row, col, type, side) {
     if(G.enemyType==='titan') hp = Math.round(hp * 2);
   }
 
+  // Multiplayer chess mode: scale HP down to ~1/3 so pieces die in 1-3 hits
+  // King: 10 → 3, Queen: 8 → 3, Rook: 7 → 2, Bishop/Knight: 5 → 2, Pawn: 3 → 1
+  if(G.isMultiplayer) {
+    hp = Math.max(1, Math.round(hp / 3));
+  }
+
   const piece = { type, side, hp, maxHP: hp, row, col, id: Math.random().toString(36).substr(2,8), upgrades: [], stunnedTurns: 0, burnStacks: 0, frozen: 0, moved: 0, xp: 0, pieceLevel: 1 };
   G.board[row][col] = piece;
   if(side==='player') G.playerPieces[piece.id] = piece;
