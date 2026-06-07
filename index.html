@@ -2148,7 +2148,10 @@ function executeMove(piece, toRow, toCol, isAttack) {
   renderBoard();
 
   // Multiplayer: push updated board state after every move
-  if(G.isMultiplayer) mpPushBoardState();
+  if(G.isMultiplayer) {
+    mpOnPlayerMoveChess();
+    return;
+  }
 
   if(G.levelCompleting) {
     G.turnPhase = 'player';
@@ -3902,17 +3905,192 @@ async function mpCancelGame() {
 // ── START MATCH ───────────────────────────────────
 function mpStartMatch() {
   MP.status = 'active';
-  startGame();
+  G.isMultiplayer = true;
+  G.mpRole = MP.role;         // 'host' = white, 'guest' = black
+  G.mpGameRef = MP.gameRef;
+  G.mpMoveCount = 0;
+
+  // Boot the UI but use a special init for the shared chess board
+  initGameState();
   G.isMultiplayer = true;
   G.mpRole = MP.role;
   G.mpGameRef = MP.gameRef;
-  if(MP.role === 'host') mpPushBoardState();
-  mpListenForOpponent();
-  showNotification(MP.myName + ' vs ' + MP.opponentName + ' — FIGHT!');
-  addLog('Multiplayer vs ' + MP.opponentName, 'good');
-  // Show the opponent panel in the game UI
+  G.mpMoveCount = 0;
+
+  setupBoard();
+  mpInitChessBoard();
+
+  // Hide the roguelike enemy panel; show opponent panel instead
+  const enemyCard = document.getElementById('enemyInfoCard');
+  if(enemyCard) enemyCard.parentElement.style.display = 'none';
   const opContainer = document.getElementById('mpOpponentContainer');
   if(opContainer) opContainer.style.display = 'block';
+
+  document.getElementById('levelBadge').textContent  = '⚔ VS MATCH';
+  document.getElementById('enemyBadge').textContent  = MP.role === 'host' ? '♔ White' : '♚ Black';
+  document.getElementById('endOverlay').classList.remove('active');
+  document.getElementById('shopOverlay').classList.remove('active');
+  document.getElementById('levelUpOverlay').classList.remove('active');
+
+  // Host writes the initial shared board; both listen for changes
+  if(MP.role === 'host') {
+    mpPushSharedBoard();
+  }
+  mpListenSharedBoard();
+  mpListenForOpponent();
+
+  // Whose turn is it? Host (white) goes first
+  G.turnPhase = MP.role === 'host' ? 'player' : 'waiting';
+  mpUpdateTurnIndicator();
+
+  showScreen('gameScreen');
+  renderBoard();
+  updateTopBar();
+  addLog('⚔ Multiplayer Chess vs ' + MP.opponentName, 'good');
+  addLog(MP.role === 'host' ? 'You are White — you go first' : 'You are Black — wait for White', '');
+  showNotification(MP.myName + ' vs ' + MP.opponentName);
+}
+
+// ── CHESS BOARD INIT ────────────────────────────────
+function mpInitChessBoard() {
+  G.board = Array(8).fill(null).map(() => Array(8).fill(null));
+  G.playerPieces = {};
+  G.enemyPieces  = {};
+
+  const backRow = ['rook','knight','bishop','queen','king','bishop','knight','rook'];
+
+  if(MP.role === 'host') {
+    // White: player pieces on rows 6-7, opponent (black) on rows 0-1
+    backRow.forEach((t,c) => placePiece(7, c, t, 'player'));
+    for(let c=0;c<8;c++) placePiece(6, c, 'pawn', 'player');
+    backRow.forEach((t,c) => placePiece(0, c, t, 'enemy'));
+    for(let c=0;c<8;c++) placePiece(1, c, 'pawn', 'enemy');
+  } else {
+    // Black: player pieces on rows 0-1 (flipped), opponent (white) on rows 6-7
+    backRow.forEach((t,c) => placePiece(0, c, t, 'player'));
+    for(let c=0;c<8;c++) placePiece(1, c, 'pawn', 'player');
+    backRow.forEach((t,c) => placePiece(7, c, t, 'enemy'));
+    for(let c=0;c<8;c++) placePiece(6, c, 'pawn', 'enemy');
+  }
+}
+
+// ── PUSH / PULL SHARED BOARD ────────────────────────
+function mpPushSharedBoard() {
+  if(!G.mpGameRef) return;
+  const allPieces = [];
+  Object.values(G.playerPieces).forEach(p => {
+    if(!p.captured) allPieces.push({
+      id:p.id, type:p.type, row:p.row, col:p.col,
+      hp:p.hp, maxHP:p.maxHP,
+      owner: MP.role,   // 'host' or 'guest'
+    });
+  });
+  Object.values(G.enemyPieces).forEach(p => {
+    if(!p.captured) allPieces.push({
+      id:p.id, type:p.type, row:p.row, col:p.col,
+      hp:p.hp, maxHP:p.maxHP,
+      owner: MP.role === 'host' ? 'guest' : 'host',
+    });
+  });
+  G.mpGameRef.child('sharedBoard').set({
+    pieces: allPieces,
+    turn: MP.role,             // who just moved (so opponent knows it's their turn)
+    moveCount: G.mpMoveCount,
+    ts: Date.now(),
+  });
+  G.mpGameRef.child(MP.role + 'Upgrades').set(G.upgrades || []);
+}
+
+function mpListenSharedBoard() {
+  if(!G.mpGameRef) return;
+  const off = G.mpGameRef.child('sharedBoard').on('value', snap => {
+    if(!snap.exists()) return;
+    const d = snap.val();
+    if(!d || !d.pieces) return;
+
+    // Only apply if the opponent just moved (not our own push)
+    if(d.turn !== MP.role) {
+      mpApplySharedBoard(d);
+    }
+
+    // Update turn — it's our turn if the last push was from the opponent
+    const ourTurn = (d.turn !== MP.role);
+    G.turnPhase = ourTurn ? 'player' : 'waiting';
+    mpUpdateTurnIndicator();
+    renderBoard();
+    updateTopBar();
+  });
+  MP.listeners.push(() => { if(G.mpGameRef) G.mpGameRef.child('sharedBoard').off('value', off); });
+}
+
+function mpApplySharedBoard(d) {
+  // Rebuild G.board, G.playerPieces, G.enemyPieces from the shared state
+  G.board = Array(8).fill(null).map(() => Array(8).fill(null));
+  G.playerPieces = {};
+  G.enemyPieces  = {};
+
+  (d.pieces || []).forEach(p => {
+    const isMyPiece = (p.owner === MP.role);
+    const side = isMyPiece ? 'player' : 'enemy';
+    const piece = {
+      id: p.id, type: p.type, side,
+      row: p.row, col: p.col,
+      hp: p.hp, maxHP: p.maxHP,
+      upgrades: [], stunnedTurns: 0, burnStacks: 0,
+      frozen: 0, moved: 0, xp: 0, pieceLevel: 1, captured: false,
+    };
+    G.board[p.row][p.col] = piece;
+    if(isMyPiece) G.playerPieces[piece.id] = piece;
+    else           G.enemyPieces[piece.id]  = piece;
+  });
+
+  G.mpMoveCount = d.moveCount || 0;
+
+  // Check if our king is gone — we lost
+  const myKingAlive = Object.values(G.playerPieces).some(p => p.type === 'king' && !p.captured);
+  if(!myKingAlive) {
+    const opponent = MP.role === 'host' ? 'guest' : 'host';
+    mpDeclareWinner(opponent);
+  }
+}
+
+// ── OVERRIDE executeMove FOR MULTIPLAYER ─────────────────
+// Called after a successful player move in multiplayer mode
+function mpOnPlayerMoveChess() {
+  if(!G.isMultiplayer) return;
+  G.mpMoveCount++;
+  // Push the updated board to Firebase so opponent sees it
+  mpPushSharedBoard();
+  // Lock our turn until opponent moves
+  G.turnPhase = 'waiting';
+  mpUpdateTurnIndicator();
+
+  // Powerup every 5 moves
+  if(G.mpMoveCount % 5 === 0) {
+    setTimeout(() => showPowerupChoice(), 400);
+  }
+
+  // Check if opponent king is gone — we won
+  const opKingAlive = Object.values(G.enemyPieces).some(p => p.type === 'king' && !p.captured);
+  if(!opKingAlive) {
+    mpDeclareWinner(MP.role);
+  }
+}
+
+function mpUpdateTurnIndicator() {
+  const badge = document.getElementById('levelBadge');
+  const top   = document.getElementById('enemyBadge');
+  if(!badge || !top) return;
+  if(G.turnPhase === 'player') {
+    badge.textContent = '⚔ YOUR TURN';
+    badge.style.borderColor = 'var(--gold)';
+    badge.style.color = 'var(--gold)';
+  } else {
+    badge.textContent = '⏳ WAITING...';
+    badge.style.borderColor = '#444';
+    badge.style.color = '#555';
+  }
+  top.textContent = MP.role === 'host' ? '♔ White (You)' : '♚ Black (You)';
 }
 
 // ── SYNC ─────────────────────────────────────────
@@ -3956,11 +4134,19 @@ function mpListenForOpponent() {
 function mpRenderOpponentInfo(d) {
   const el = document.getElementById('mpOpponentPanel');
   if(!el || !d) return;
-  const alive = d.pieces ? d.pieces.filter(p=>p.side==='player').length : '?';
+  // In chess mode, count opponent's surviving pieces from shared board
+  let opPieces = 0, myPieces = 0;
+  if(d.pieces) {
+    d.pieces.forEach(p => {
+      if(p.owner === MP.role) myPieces++;
+      else opPieces++;
+    });
+  }
+  const opColor = MP.role === 'host' ? '♚ Black' : '♔ White';
   el.innerHTML =
-    '<div style="font-family:var(--font-cinzel);font-size:9px;letter-spacing:2px;color:var(--text2);">OPPONENT · ' + (MP.opponentName||'?') + '</div>' +
-    '<div style="font-family:var(--font-gothic);font-size:18px;color:var(--red2);">♟ ' + alive + ' pieces</div>' +
-    '<div style="font-size:10px;color:#555;font-family:var(--font-cinzel);">LVL ' + (d.level||1) + ' · ◆' + (d.gold||0) + ' · ♥' + (d.lives||3) + '</div>';
+    '<div style="font-family:var(--font-cinzel);font-size:9px;letter-spacing:2px;color:var(--text2);">' + opColor + ' · ' + (MP.opponentName||'Opponent') + '</div>' +
+    '<div style="font-family:var(--font-gothic);font-size:18px;color:var(--red2);margin-top:4px;">♟ ' + opPieces + ' pieces</div>' +
+    '<div style="font-size:10px;color:#555;font-family:var(--font-cinzel);margin-top:2px;">You have ' + myPieces + ' pieces</div>';
 }
 
 // ── WIN/LOSE ──────────────────────────────────────
@@ -3973,10 +4159,12 @@ function mpHandleResult(winner) {
   MP.status = 'finished';
   mpDetachListeners();
   const iWon = winner === G.mpRole;
-  document.getElementById('mpResultTitle').textContent = iWon ? '⚔ Victory' : '☠ Defeat';
+  const myColor = MP.role === 'host' ? 'White' : 'Black';
+  const opColor = MP.role === 'host' ? 'Black' : 'White';
+  document.getElementById('mpResultTitle').textContent = iWon ? '♔ Checkmate!' : '♚ Defeated';
   document.getElementById('mpResultSub').textContent   = iWon
-    ? 'You defeated ' + MP.opponentName + '!'
-    : MP.opponentName + ' has bested you.';
+    ? myColor + ' wins! ' + MP.opponentName + ' has been checkmated.'
+    : opColor + ' wins. ' + MP.opponentName + ' has checkmated you.';
   document.getElementById('mpGameOverlay').style.display = 'flex';
 }
 async function mpRematch() {
